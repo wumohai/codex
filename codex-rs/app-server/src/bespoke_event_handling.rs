@@ -1,5 +1,6 @@
 use crate::codex_message_processor::ApiVersion;
 use crate::codex_message_processor::PendingInterrupts;
+use crate::codex_message_processor::PendingRollbacks;
 use crate::codex_message_processor::TurnSummary;
 use crate::codex_message_processor::TurnSummaryStore;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -40,6 +41,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::Turn;
@@ -84,6 +86,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: PendingInterrupts,
+    pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
     api_version: ApiVersion,
 ) {
@@ -687,6 +690,23 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &turn_summary_store,
             )
             .await;
+        }
+        EventMsg::ThreadRollback(_rollback_event) => {
+            let pending = {
+                let mut map = pending_rollbacks.lock().await;
+                map.remove(&conversation_id).unwrap_or_default()
+            };
+
+            for (rid, ver) in pending {
+                match ver {
+                    ApiVersion::V2 => {
+                        outgoing.send_response(rid, ThreadRollbackResponse {}).await;
+                    }
+                    ApiVersion::V1 => {
+                        // No v1 API for rollback; ignore.
+                    }
+                }
+            }
         }
         EventMsg::TurnDiff(turn_diff_event) => {
             handle_turn_diff(

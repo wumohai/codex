@@ -1202,10 +1202,51 @@ impl Session {
                         history.replace(rebuilt);
                     }
                 }
+                RolloutItem::EventMsg(EventMsg::ThreadRollback(rollback)) => {
+                    let snapshot = history.get_history();
+                    history.replace(Self::drop_last_n_user_turns_from_items(
+                        &snapshot,
+                        rollback.num_turns,
+                    ));
+                }
                 _ => {}
             }
         }
         history.get_history()
+    }
+
+    fn drop_last_n_user_turns_from_items(
+        items: &[ResponseItem],
+        num_turns: u32,
+    ) -> Vec<ResponseItem> {
+        if num_turns == 0 {
+            return items.to_vec();
+        }
+
+        let mut user_positions = Vec::new();
+        for (idx, item) in items.iter().enumerate() {
+            if let ResponseItem::Message { .. } = item
+                && matches!(
+                    crate::event_mapping::parse_turn_item(item),
+                    Some(TurnItem::UserMessage(_))
+                )
+            {
+                user_positions.push(idx);
+            }
+        }
+
+        let Some(&first_user_idx) = user_positions.first() else {
+            return items.to_vec();
+        };
+
+        let n = usize::try_from(num_turns).unwrap_or(usize::MAX);
+        let cut_idx = if n >= user_positions.len() {
+            first_user_idx
+        } else {
+            user_positions[user_positions.len() - n]
+        };
+
+        items.iter().take(cut_idx).cloned().collect()
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -1639,6 +1680,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
             }
+            Op::ThreadRollback { num_turns } => {
+                handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
@@ -1696,6 +1740,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::SkillsListEntry;
+    use codex_protocol::protocol::ThreadRollbackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
 
@@ -2004,6 +2049,48 @@ mod handlers {
             CompactTask,
         )
         .await;
+    }
+
+    pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
+        if num_turns == 0 {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "num_turns must be >= 1".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        let has_active_turn = { sess.active_turn.lock().await.is_some() };
+        if has_active_turn {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Cannot rollback while a turn is in progress.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+
+        let snapshot = sess.clone_history().await.get_history();
+        let pruned = Session::drop_last_n_user_turns_from_items(&snapshot, num_turns);
+        sess.replace_history(pruned).await;
+        sess.recompute_token_usage(turn_context.as_ref()).await;
+
+        sess.send_event(
+            turn_context.as_ref(),
+            EventMsg::ThreadRollback(ThreadRollbackEvent { num_turns }),
+        )
+        .await;
+        // Ensure the rollback marker is visible to immediate readers (e.g., thread/resume).
+        sess.flush_rollout().await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {

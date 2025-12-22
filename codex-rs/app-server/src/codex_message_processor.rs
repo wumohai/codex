@@ -91,6 +91,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -177,6 +178,8 @@ use uuid::Uuid;
 
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ConversationId, PendingInterruptQueue>>>;
+type PendingRollbackQueue = Vec<(RequestId, ApiVersion)>;
+pub(crate) type PendingRollbacks = Arc<Mutex<HashMap<ConversationId, PendingRollbackQueue>>>;
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
@@ -220,6 +223,8 @@ pub(crate) struct CodexMessageProcessor {
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
+    // Queue of pending rollback requests per conversation. We reply when ThreadRollback arrives.
+    pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
@@ -275,6 +280,7 @@ impl CodexMessageProcessor {
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
+            pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
             turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
@@ -364,6 +370,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
+            }
+            ClientRequest::ThreadRollback { request_id, params } => {
+                self.thread_rollback(request_id, params).await;
             }
             ClientRequest::ThreadList { request_id, params } => {
                 self.thread_list(request_id, params).await;
@@ -1504,6 +1513,37 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, err).await;
             }
         }
+    }
+
+    async fn thread_rollback(&mut self, request_id: RequestId, params: ThreadRollbackParams) {
+        let ThreadRollbackParams {
+            thread_id,
+            num_turns,
+        } = params;
+
+        if num_turns == 0 {
+            self.send_invalid_request_error(request_id, "numTurns must be >= 1".to_string())
+                .await;
+            return;
+        }
+
+        let (conversation_id, conversation) =
+            match self.conversation_from_thread_id(&thread_id).await {
+                Ok(v) => v,
+                Err(error) => {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        {
+            let mut map = self.pending_rollbacks.lock().await;
+            map.entry(conversation_id)
+                .or_default()
+                .push((request_id, ApiVersion::V2));
+        }
+
+        let _ = conversation.submit(Op::ThreadRollback { num_turns }).await;
     }
 
     async fn thread_list(&self, request_id: RequestId, params: ThreadListParams) {
@@ -3094,6 +3134,7 @@ impl CodexMessageProcessor {
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
+        let pending_rollbacks = self.pending_rollbacks.clone();
         let turn_summary_store = self.turn_summary_store.clone();
         let api_version_for_task = api_version;
         tokio::spawn(async move {
@@ -3151,6 +3192,7 @@ impl CodexMessageProcessor {
                             conversation.clone(),
                             outgoing_for_task.clone(),
                             pending_interrupts.clone(),
+                            pending_rollbacks.clone(),
                             turn_summary_store.clone(),
                             api_version_for_task,
                         )
