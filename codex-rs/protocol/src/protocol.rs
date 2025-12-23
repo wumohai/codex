@@ -545,7 +545,7 @@ pub enum EventMsg {
     ContextCompacted(ContextCompactedEvent),
 
     /// Conversation history was rolled back by dropping the last N user turns.
-    ThreadRollback(ThreadRollbackEvent),
+    ThreadRolledBack(ThreadRolledBackEvent),
 
     /// Agent has started a task
     TaskStarted(TaskStartedEvent),
@@ -1589,7 +1589,7 @@ pub struct UndoCompletedEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ThreadRollbackEvent {
+pub struct ThreadRolledBackEvent {
     /// Number of user turns that were removed from context.
     pub num_turns: u32,
 }

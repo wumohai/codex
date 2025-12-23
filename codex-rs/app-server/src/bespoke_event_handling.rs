@@ -714,7 +714,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
-        EventMsg::ThreadRollback(_rollback_event) => {
+        EventMsg::ThreadRolledBack(_rollback_event) => {
             let pending = {
                 let mut map = pending_rollbacks.lock().await;
                 map.remove(&conversation_id)

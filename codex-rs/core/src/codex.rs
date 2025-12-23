@@ -1202,7 +1202,7 @@ impl Session {
                         history.replace(rebuilt);
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::ThreadRollback(rollback)) => {
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                     let snapshot = history.get_history();
                     history.replace(Self::drop_last_n_user_turns_from_items(
                         &snapshot,
@@ -1740,7 +1740,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::SkillsListEntry;
-    use codex_protocol::protocol::ThreadRollbackEvent;
+    use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
 
@@ -2086,7 +2086,7 @@ mod handlers {
 
         sess.send_event(
             turn_context.as_ref(),
-            EventMsg::ThreadRollback(ThreadRollbackEvent { num_turns }),
+            EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }),
         )
         .await;
         // Ensure the rollback marker is visible to immediate readers (e.g., thread/resume).

@@ -6,7 +6,7 @@ use crate::protocol::v2::UserInput;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ThreadRollbackEvent;
+use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 
@@ -58,7 +58,7 @@ impl ThreadHistoryBuilder {
             EventMsg::TokenCount(_) => {}
             EventMsg::EnteredReviewMode(_) => {}
             EventMsg::ExitedReviewMode(_) => {}
-            EventMsg::ThreadRollback(payload) => self.handle_thread_rollback(payload),
+            EventMsg::ThreadRolledBack(payload) => self.handle_thread_rollback(payload),
             EventMsg::UndoCompleted(_) => {}
             EventMsg::TurnAborted(payload) => self.handle_turn_aborted(payload),
             _ => {}
@@ -132,7 +132,7 @@ impl ThreadHistoryBuilder {
         turn.status = TurnStatus::Interrupted;
     }
 
-    fn handle_thread_rollback(&mut self, payload: &ThreadRollbackEvent) {
+    fn handle_thread_rollback(&mut self, payload: &ThreadRolledBackEvent) {
         self.finish_current_turn();
 
         let n = usize::try_from(payload.num_turns).unwrap_or(usize::MAX);
@@ -232,7 +232,7 @@ mod tests {
     use codex_protocol::protocol::AgentMessageEvent;
     use codex_protocol::protocol::AgentReasoningEvent;
     use codex_protocol::protocol::AgentReasoningRawContentEvent;
-    use codex_protocol::protocol::ThreadRollbackEvent;
+    use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::UserMessageEvent;
@@ -448,7 +448,7 @@ mod tests {
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
             }),
-            EventMsg::ThreadRollback(ThreadRollbackEvent { num_turns: 1 }),
+            EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Third".into(),
                 images: None,
@@ -515,7 +515,7 @@ mod tests {
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
             }),
-            EventMsg::ThreadRollback(ThreadRollbackEvent { num_turns: 99 }),
+            EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 99 }),
         ];
 
         let turns = build_turns_from_event_msgs(&events);
